@@ -9,35 +9,63 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Login and fetch Myfxbook data
         run: |
-          SESSION=$(curl -s "https://www.myfxbook.com/api/login.json?email=${{ secrets.MYFXBOOK_EMAIL }}&password=${{ secrets.MYFXBOOK_PASSWORD }}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['session'])")
+          RESPONSE=$(curl -s "https://www.myfxbook.com/api/login.json?email=${{ secrets.MYFXBOOK_EMAIL }}&password=${{ secrets.MYFXBOOK_PASSWORD }}")
+          echo "API Response: $RESPONSE"
 
-          curl -s "https://www.myfxbook.com/api/get-my-accounts.json?session=$SESSION" > all_accounts.json
+          SESSION=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session',''))")
+          echo "Session: $SESSION"
+
+          if [ -z "$SESSION" ]; then
+            echo "ERROR: No session token received"
+            exit 1
+          fi
+
+          ACCOUNTS=$(curl -s "https://www.myfxbook.com/api/get-my-accounts.json?session=$SESSION")
+          echo "Accounts response: $ACCOUNTS"
 
           python3 - <<'EOF'
-          import json
+          import json, os, sys
 
-          with open('all_accounts.json') as f:
-              data = json.load(f)
+          with open('/dev/stdin') as f:
+              pass
+
+          import subprocess
+          result = subprocess.run(['bash', '-c', 'echo $ACCOUNTS'], capture_output=True, text=True)
+
+          EOF
+
+          echo "$ACCOUNTS" | python3 - <<'EOF'
+          import json, os, sys
+
+          data = json.load(sys.stdin)
+          print("Accounts found:", len(data.get('accounts', [])))
 
           accounts = data.get('accounts', [])
+          for a in accounts:
+              print("Account ID:", a.get('id'), "Name:", a.get('name'))
 
           oro = next((a for a in accounts if str(a.get('id')) == '11945489'), None)
           btc = next((a for a in accounts if str(a.get('id')) == '11726357'), None)
 
-          import os
           os.makedirs('data', exist_ok=True)
 
           if oro:
               with open('data/oro.json', 'w') as f:
                   json.dump(oro, f)
+              print("Saved oro.json")
+          else:
+              print("WARNING: ORO account not found")
 
           if btc:
               with open('data/btc.json', 'w') as f:
                   json.dump(btc, f)
+              print("Saved btc.json")
+          else:
+              print("WARNING: BTC account not found")
           EOF
 
       - name: Commit and push
