@@ -1,0 +1,49 @@
+name: Sync Myfxbook Data
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Login and fetch Myfxbook data
+        run: |
+          RESPONSE=$(curl -s "https://www.myfxbook.com/api/login.json?email=${{ secrets.MYFXBOOK_EMAIL }}&password=${{ secrets.MYFXBOOK_PASSWORD }}")
+          echo "API Response: $RESPONSE"
+          SESSION=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session','NO_SESSION'))")
+          echo "Session: $SESSION"
+          if [ "$SESSION" = "NO_SESSION" ] || [ -z "$SESSION" ]; then
+            echo "Login failed"
+            exit 1
+          fi
+          ACCOUNTS=$(curl -s "https://www.myfxbook.com/api/get-my-accounts.json?session=$SESSION")
+          echo "Accounts: $ACCOUNTS"
+          echo "$ACCOUNTS" | python3 -c "
+          import json,os,sys
+          data=json.load(sys.stdin)
+          accounts=data.get('accounts',[])
+          print('Total accounts:',len(accounts))
+          for a in accounts: print('ID:',a.get('id'),'Name:',a.get('name'))
+          oro=next((a for a in accounts if str(a.get('id'))=='11945489'),None)
+          btc=next((a for a in accounts if str(a.get('id'))=='11726357'),None)
+          os.makedirs('data',exist_ok=True)
+          if oro: open('data/oro.json','w').write(json.dumps(oro)); print('Saved oro.json')
+          if btc: open('data/btc.json','w').write(json.dumps(btc)); print('Saved btc.json')
+          "
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          git add data/
+          git diff --staged --quiet || git commit -m "sync myfxbook data"
+          git push
